@@ -1,5 +1,5 @@
 name: Stok Takip
-version: "1.6"
+version: "1.7"
 slug: stock_watcher
 description: Verilen ürün linkini saat başı kontrol eder ve ürün stoğa girince Pushover bildirimi gönderir.
 url: https://github.com/nriacr/stock-watcher/tree/main/stock-watcher
@@ -13,7 +13,7 @@ init: false
 options:
   pushover_user_key: ""
   pushover_api_token: ""
-  notify_once: true
+  notify_once_in_24h: true
   request_timeout_seconds: 20
   user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   products:
@@ -35,7 +35,7 @@ options:
 schema:
   pushover_user_key: password
   pushover_api_token: password
-  notify_once: bool
+  notify_once_in_24h: bool
   request_timeout_seconds: int(5,120)
   user_agent: str
   products:
