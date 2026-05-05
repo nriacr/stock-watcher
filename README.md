@@ -26,8 +26,9 @@ GitHub repository adresi: https://github.com/nriacr/stock-watcher
 
 ## Gerekli Bilgiler
 
+- Ürün adları ve linkleri
 - Pushover User Key
 - Pushover API Token
-- Ürün adları ve linkleri
+- Her ürün için kontrol sıklığı
 - Her ürün için stokta olduğunu gösteren metinler
 - Her ürün için stokta olmadığını gösteren metinler
