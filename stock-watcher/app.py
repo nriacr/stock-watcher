@@ -35,7 +35,7 @@ class Settings:
     products: list[Product]
     pushover_user_key: str
     pushover_api_token: str
-    notify_once: bool
+    notify_once_in_24h: bool
     request_timeout_seconds: int
     user_agent: str
 
@@ -49,7 +49,7 @@ def load_settings() -> Settings:
         products=load_products(raw),
         pushover_user_key=raw.get("pushover_user_key", "").strip(),
         pushover_api_token=raw.get("pushover_api_token", "").strip(),
-        notify_once=bool(raw.get("notify_once", True)),
+        notify_once_in_24h=bool(raw.get("notify_once_in_24h", raw.get("notify_once", True))),
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 20)),
         user_agent=raw.get(
             "user_agent",
@@ -178,7 +178,7 @@ def send_pushover(settings: Settings, product: Product) -> None:
 
 
 def main() -> None:
-    notified_products: set[str] = set()
+    last_notification_times: dict[str, float] = {}
     next_check_times: dict[str, float] = {}
 
     while True:
@@ -200,15 +200,13 @@ def main() -> None:
                 in_stock = detect_stock_state(text, product)
 
                 if in_stock:
-                    if settings.notify_once and product_key in notified_products:
-                        logging.info("STOKTA: %s", product.name)
-                    else:
-                        logging.info("STOKTA: %s", product.name)
+                    logging.info("STOKTA: %s", product.name)
+                    if should_send_notification(settings, product_key, last_notification_times):
                         send_pushover(settings, product)
-                        notified_products.add(product_key)
+                        last_notification_times[product_key] = time.monotonic()
                 else:
                     logging.info("Stokta Değil: %s", product.name)
-                    notified_products.discard(product_key)
+                    last_notification_times.pop(product_key, None)
 
                 next_check_times[product_key] = (
                     time.monotonic() + max(product.check_interval_minutes, 5) * 60
@@ -234,6 +232,21 @@ def next_sleep_seconds(products: list[Product], next_check_times: dict[str, floa
         return 1
 
     return max(1, min(60, int(min(pending_times) - time.monotonic())))
+
+
+def should_send_notification(
+    settings: Settings,
+    product_key: str,
+    last_notification_times: dict[str, float],
+) -> bool:
+    if not settings.notify_once_in_24h:
+        return True
+
+    last_notification_time = last_notification_times.get(product_key)
+    if last_notification_time is None:
+        return True
+
+    return time.monotonic() - last_notification_time >= 24 * 60 * 60
 
 
 if __name__ == "__main__":
