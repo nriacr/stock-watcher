@@ -7,7 +7,7 @@ Bu eklenti, verdiğiniz ürün sayfalarını düzenli aralıklarla kontrol eder.
 - `products`: Kontrol edilecek ürün listesi. Her ürün için `name`, `url`, `check_interval_minutes`, `in_stock_keywords` ve `out_of_stock_keywords` girilir.
 - `pushover_user_key`: Pushover kullanıcı anahtarı.
 - `pushover_api_token`: Pushover uygulama API token değeri.
-- `notify_once`: Ürün stoktayken her ürün için yalnızca bir kere bildirim gönderir. Ürün tekrar stok dışı görünüp sonra stoğa girerse yeniden bildirir.
+- `notify_once_in_24h`: Ürün stokta kalmaya devam ederse aynı ürün için 24 saat boyunca tekrar bildirim göndermez. Ürün stok dışına düşerse sayaç sıfırlanır.
 - `user_agent`: Ürün sayfasına istek atarken kullanılan tarayıcı kimliğidir. Genelde değiştirmeyin; site istekleri engellerse bilgisayarınızdaki Chrome veya Safari User-Agent değeriyle değiştirilebilir.
 
 Örnek ürün listesi:
