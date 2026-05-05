@@ -45,10 +45,8 @@ def load_settings() -> Settings:
         raise FileNotFoundError(f"Home Assistant options file was not found: {OPTIONS_PATH}")
 
     raw = json.loads(OPTIONS_PATH.read_text(encoding="utf-8"))
-    in_stock_keywords = normalize_keywords(raw.get("in_stock_keywords", []))
-    out_of_stock_keywords = normalize_keywords(raw.get("out_of_stock_keywords", []))
     settings = Settings(
-        products=load_products(raw, in_stock_keywords, out_of_stock_keywords),
+        products=load_products(raw),
         check_interval_minutes=int(raw.get("check_interval_minutes", 60)),
         pushover_user_key=raw.get("pushover_user_key", "").strip(),
         pushover_api_token=raw.get("pushover_api_token", "").strip(),
@@ -60,13 +58,11 @@ def load_settings() -> Settings:
     return settings
 
 
-def load_products(
-    raw: dict,
-    in_stock_keywords: list[str],
-    out_of_stock_keywords: list[str],
-) -> list[Product]:
+def load_products(raw: dict) -> list[Product]:
     products = []
     raw_products = raw.get("products", [])
+    legacy_in_stock_keywords = normalize_keywords(raw.get("in_stock_keywords", []))
+    legacy_out_of_stock_keywords = normalize_keywords(raw.get("out_of_stock_keywords", []))
 
     if isinstance(raw_products, list):
         for index, item in enumerate(raw_products, start=1):
@@ -75,12 +71,14 @@ def load_products(
 
             name = str(item.get("name") or f"Ürün {index}").strip()
             url = str(item.get("url") or "").strip()
+            in_stock_keywords = normalize_keywords(item.get("in_stock_keywords", []))
+            out_of_stock_keywords = normalize_keywords(item.get("out_of_stock_keywords", []))
             products.append(
                 Product(
                     name=name,
                     url=url,
-                    in_stock_keywords=in_stock_keywords,
-                    out_of_stock_keywords=out_of_stock_keywords,
+                    in_stock_keywords=in_stock_keywords or legacy_in_stock_keywords,
+                    out_of_stock_keywords=out_of_stock_keywords or legacy_out_of_stock_keywords,
                 )
             )
 
@@ -90,8 +88,8 @@ def load_products(
             Product(
                 name="Ürün 1",
                 url=legacy_url,
-                in_stock_keywords=in_stock_keywords,
-                out_of_stock_keywords=out_of_stock_keywords,
+                in_stock_keywords=legacy_in_stock_keywords,
+                out_of_stock_keywords=legacy_out_of_stock_keywords,
             )
         )
 
