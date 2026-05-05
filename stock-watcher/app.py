@@ -12,6 +12,11 @@ from bs4 import BeautifulSoup
 
 OPTIONS_PATH = Path("/data/options.json")
 PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+NO_ACTIVE_PRODUCTS_SLEEP_SECONDS = 5 * 60
 
 
 logging.basicConfig(
@@ -51,11 +56,7 @@ def load_settings() -> Settings:
         pushover_user_key=raw.get("pushover_user_key", "").strip(),
         pushover_api_token=raw.get("pushover_api_token", "").strip(),
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 20)),
-        user_agent=raw.get(
-            "user_agent",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        ).strip(),
+        user_agent=raw.get("user_agent", DEFAULT_USER_AGENT).strip(),
     )
     validate_settings(settings)
     return settings
@@ -64,10 +65,6 @@ def load_settings() -> Settings:
 def load_products(raw: dict) -> list[Product]:
     products = []
     raw_products = raw.get("products", [])
-    legacy_check_interval_minutes = int(raw.get("check_interval_minutes", 60))
-    legacy_notify_once_in_24h = bool(raw.get("notify_once_in_24h", raw.get("notify_once", True)))
-    legacy_in_stock_keywords = normalize_keywords(raw.get("in_stock_keywords", []))
-    legacy_out_of_stock_keywords = normalize_keywords(raw.get("out_of_stock_keywords", []))
 
     if isinstance(raw_products, list):
         for index, item in enumerate(raw_products, start=1):
@@ -75,12 +72,10 @@ def load_products(raw: dict) -> list[Product]:
                 continue
 
             name = str(item.get("name") or f"Ürün {index}").strip()
-            enabled = bool(item.get("enabled", True))
+            enabled = as_bool(item.get("enabled"), default=True)
             url = str(item.get("url") or "").strip()
-            notify_once_in_24h = bool(item.get("notify_once_in_24h", legacy_notify_once_in_24h))
-            check_interval_minutes = int(
-                item.get("check_interval_minutes", legacy_check_interval_minutes)
-            )
+            notify_once_in_24h = as_bool(item.get("notify_once_in_24h"), default=True)
+            check_interval_minutes = as_int(item.get("check_interval_minutes"), default=60)
             in_stock_keywords = normalize_keywords(item.get("in_stock_keywords", []))
             out_of_stock_keywords = normalize_keywords(item.get("out_of_stock_keywords", []))
             products.append(
@@ -90,26 +85,33 @@ def load_products(raw: dict) -> list[Product]:
                     url=url,
                     notify_once_in_24h=notify_once_in_24h,
                     check_interval_minutes=check_interval_minutes,
-                    in_stock_keywords=in_stock_keywords or legacy_in_stock_keywords,
-                    out_of_stock_keywords=out_of_stock_keywords or legacy_out_of_stock_keywords,
+                    in_stock_keywords=in_stock_keywords,
+                    out_of_stock_keywords=out_of_stock_keywords,
                 )
             )
 
-    legacy_url = str(raw.get("product_url") or "").strip()
-    if not products and legacy_url:
-        products.append(
-            Product(
-                name="Ürün 1",
-                enabled=True,
-                url=legacy_url,
-                notify_once_in_24h=legacy_notify_once_in_24h,
-                check_interval_minutes=legacy_check_interval_minutes,
-                in_stock_keywords=legacy_in_stock_keywords,
-                out_of_stock_keywords=legacy_out_of_stock_keywords,
-            )
-        )
-
     return products
+
+
+def as_bool(value: object, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "on", "evet", "aktif"}
+
+    return bool(value)
+
+
+def as_int(value: object, default: int) -> int:
+    if value is None:
+        return default
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def normalize_keywords(value: object) -> list[str]:
@@ -121,14 +123,22 @@ def normalize_keywords(value: object) -> list[str]:
 
 def validate_settings(settings: Settings) -> None:
     missing = []
-    if not settings.products or not any(product.url for product in settings.products):
+    active_products = [product for product in settings.products if product.enabled and product.url]
+
+    if not settings.products:
         missing.append("products")
-    if not settings.pushover_user_key:
+    if active_products and not settings.pushover_user_key:
         missing.append("pushover_user_key")
-    if not settings.pushover_api_token:
+    if active_products and not settings.pushover_api_token:
         missing.append("pushover_api_token")
-    if not any(product.in_stock_keywords or product.out_of_stock_keywords for product in settings.products):
-        missing.append("in_stock_keywords or out_of_stock_keywords")
+
+    products_without_keywords = [
+        product.name
+        for product in active_products
+        if not product.in_stock_keywords and not product.out_of_stock_keywords
+    ]
+    if products_without_keywords:
+        missing.append("keywords for " + ", ".join(products_without_keywords))
 
     if missing:
         raise ValueError("Zorunlu eklenti ayarları eksik: " + ", ".join(missing))
@@ -192,52 +202,52 @@ def main() -> None:
         try:
             settings = load_settings()
             now = time.monotonic()
+            product_keys = {product_key_for(product) for product in settings.products}
+            prune_product_state(product_keys, next_check_times, last_notification_times)
+
             active_products = [product for product in settings.products if product.enabled and product.url]
             if not active_products:
                 next_check_times.clear()
                 last_notification_times.clear()
                 logging.info("Kontrol edilecek aktif ürün bulunamadı.")
-                sleep_seconds = 5 * 60
-                time.sleep(sleep_seconds)
-                continue
-
-            for product in settings.products:
-                product_key = product.url
-                if not product.enabled:
-                    if product_key:
+                sleep_seconds = NO_ACTIVE_PRODUCTS_SLEEP_SECONDS
+            else:
+                for product in settings.products:
+                    product_key = product_key_for(product)
+                    if not product.enabled:
                         next_check_times.pop(product_key, None)
                         last_notification_times.pop(product_key, None)
-                    continue
+                        continue
 
-                if not product.url:
-                    logging.info("Linki olmayan ürün atlandı: %s", product.name)
-                    continue
+                    if not product.url:
+                        logging.info("Linki olmayan ürün atlandı: %s", product.name)
+                        continue
 
-                next_check_time = next_check_times.get(product_key, 0)
-                if now < next_check_time:
-                    continue
+                    next_check_time = next_check_times.get(product_key, 0)
+                    if now < next_check_time:
+                        continue
 
-                logging.info("Ürün sayfası kontrol ediliyor: %s (%s)", product.name, product.url)
-                text = page_text(fetch_product_page(settings, product))
-                in_stock = detect_stock_state(text, product)
+                    logging.info("Ürün sayfası kontrol ediliyor: %s (%s)", product.name, product.url)
+                    text = page_text(fetch_product_page(settings, product))
+                    in_stock = detect_stock_state(text, product)
 
-                if in_stock:
-                    logging.info("STOKTA: %s", product.name)
-                    if should_send_notification(product, product_key, last_notification_times):
-                        send_pushover(settings, product)
-                        last_notification_times[product_key] = time.monotonic()
-                else:
-                    logging.info("Stokta Değil: %s", product.name)
-                    last_notification_times.pop(product_key, None)
+                    if in_stock:
+                        logging.info("STOKTA: %s", product.name)
+                        if should_send_notification(product, product_key, last_notification_times):
+                            send_pushover(settings, product)
+                            last_notification_times[product_key] = time.monotonic()
+                    else:
+                        logging.info("Stokta Değil: %s", product.name)
+                        last_notification_times.pop(product_key, None)
 
-                next_check_times[product_key] = (
-                    time.monotonic() + max(product.check_interval_minutes, 5) * 60
-                )
+                    next_check_times[product_key] = (
+                        time.monotonic() + max(product.check_interval_minutes, 5) * 60
+                    )
 
-            sleep_seconds = next_sleep_seconds(settings.products, next_check_times)
+                sleep_seconds = next_sleep_seconds(settings.products, next_check_times)
         except Exception as exc:
             logging.exception("Kontrol sırasında hata oluştu: %s", exc)
-            sleep_seconds = 5 * 60
+            sleep_seconds = NO_ACTIVE_PRODUCTS_SLEEP_SECONDS
 
         time.sleep(sleep_seconds)
 
@@ -245,18 +255,33 @@ def main() -> None:
 def next_sleep_seconds(products: list[Product], next_check_times: dict[str, float]) -> int:
     active_products = [product for product in products if product.enabled and product.url]
     if not active_products:
-        return 5 * 60
+        return NO_ACTIVE_PRODUCTS_SLEEP_SECONDS
 
     pending_times = [
-        next_check_times[product.url]
+        next_check_times[product_key_for(product)]
         for product in active_products
-        if product.url in next_check_times
+        if product_key_for(product) in next_check_times
     ]
 
     if len(pending_times) < len(active_products):
         return 1
 
     return max(1, min(60, int(min(pending_times) - time.monotonic())))
+
+
+def product_key_for(product: Product) -> str:
+    return f"{product.name}|{product.url}"
+
+
+def prune_product_state(
+    product_keys: set[str],
+    next_check_times: dict[str, float],
+    last_notification_times: dict[str, float],
+) -> None:
+    for state in (next_check_times, last_notification_times):
+        for product_key in list(state):
+            if product_key not in product_keys:
+                state.pop(product_key, None)
 
 
 def should_send_notification(
