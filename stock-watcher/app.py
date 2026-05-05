@@ -24,6 +24,7 @@ logging.basicConfig(
 @dataclass
 class Product:
     name: str
+    enabled: bool
     url: str
     check_interval_minutes: int
     in_stock_keywords: list[str]
@@ -74,6 +75,7 @@ def load_products(raw: dict) -> list[Product]:
                 continue
 
             name = str(item.get("name") or f"Ürün {index}").strip()
+            enabled = bool(item.get("enabled", True))
             url = str(item.get("url") or "").strip()
             check_interval_minutes = int(
                 item.get("check_interval_minutes", legacy_check_interval_minutes)
@@ -83,6 +85,7 @@ def load_products(raw: dict) -> list[Product]:
             products.append(
                 Product(
                     name=name,
+                    enabled=enabled,
                     url=url,
                     check_interval_minutes=check_interval_minutes,
                     in_stock_keywords=in_stock_keywords or legacy_in_stock_keywords,
@@ -95,6 +98,7 @@ def load_products(raw: dict) -> list[Product]:
         products.append(
             Product(
                 name="Ürün 1",
+                enabled=True,
                 url=legacy_url,
                 check_interval_minutes=legacy_check_interval_minutes,
                 in_stock_keywords=legacy_in_stock_keywords,
@@ -186,11 +190,18 @@ def main() -> None:
             settings = load_settings()
             now = time.monotonic()
             for product in settings.products:
+                product_key = product.url
+                if not product.enabled:
+                    if product_key:
+                        next_check_times.pop(product_key, None)
+                        last_notification_times.pop(product_key, None)
+                    logging.info("Pasif ürün atlandı: %s", product.name)
+                    continue
+
                 if not product.url:
                     logging.info("Linki olmayan ürün atlandı: %s", product.name)
                     continue
 
-                product_key = product.url
                 next_check_time = next_check_times.get(product_key, 0)
                 if now < next_check_time:
                     continue
@@ -221,7 +232,7 @@ def main() -> None:
 
 
 def next_sleep_seconds(products: list[Product], next_check_times: dict[str, float]) -> int:
-    active_products = [product for product in products if product.url]
+    active_products = [product for product in products if product.enabled and product.url]
     pending_times = [
         next_check_times[product.url]
         for product in active_products
