@@ -189,13 +189,21 @@ def main() -> None:
         try:
             settings = load_settings()
             now = time.monotonic()
+            active_products = [product for product in settings.products if product.enabled and product.url]
+            if not active_products:
+                next_check_times.clear()
+                last_notification_times.clear()
+                logging.info("Kontrol edilecek aktif ürün bulunamadı.")
+                sleep_seconds = 5 * 60
+                time.sleep(sleep_seconds)
+                continue
+
             for product in settings.products:
                 product_key = product.url
                 if not product.enabled:
                     if product_key:
                         next_check_times.pop(product_key, None)
                         last_notification_times.pop(product_key, None)
-                    logging.info("Pasif ürün atlandı: %s", product.name)
                     continue
 
                 if not product.url:
@@ -233,6 +241,9 @@ def main() -> None:
 
 def next_sleep_seconds(products: list[Product], next_check_times: dict[str, float]) -> int:
     active_products = [product for product in products if product.enabled and product.url]
+    if not active_products:
+        return 5 * 60
+
     pending_times = [
         next_check_times[product.url]
         for product in active_products
