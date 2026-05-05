@@ -16,7 +16,7 @@ PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 
 logging.basicConfig(
     level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s: %(message)s",
+    format="[%(asctime)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
@@ -42,7 +42,7 @@ class Settings:
 
 def load_settings() -> Settings:
     if not OPTIONS_PATH.exists():
-        raise FileNotFoundError(f"Home Assistant options file was not found: {OPTIONS_PATH}")
+        raise FileNotFoundError(f"Home Assistant ayar dosyası bulunamadı: {OPTIONS_PATH}")
 
     raw = json.loads(OPTIONS_PATH.read_text(encoding="utf-8"))
     settings = Settings(
@@ -124,7 +124,7 @@ def validate_settings(settings: Settings) -> None:
         missing.append("in_stock_keywords or out_of_stock_keywords")
 
     if missing:
-        raise ValueError("Missing required add-on options: " + ", ".join(missing))
+        raise ValueError("Zorunlu eklenti ayarları eksik: " + ", ".join(missing))
 
 
 def fetch_product_page(settings: Settings, product: Product) -> str:
@@ -187,7 +187,7 @@ def main() -> None:
             now = time.monotonic()
             for product in settings.products:
                 if not product.url:
-                    logging.info("Skipping product without URL: %s", product.name)
+                    logging.info("Linki olmayan ürün atlandı: %s", product.name)
                     continue
 
                 product_key = product.url
@@ -195,19 +195,19 @@ def main() -> None:
                 if now < next_check_time:
                     continue
 
-                logging.info("Checking product page: %s (%s)", product.name, product.url)
+                logging.info("Ürün sayfası kontrol ediliyor: %s (%s)", product.name, product.url)
                 text = page_text(fetch_product_page(settings, product))
                 in_stock = detect_stock_state(text, product)
 
                 if in_stock:
                     if settings.notify_once and product_key in notified_products:
-                        logging.info("%s is still in stock; notification already sent.", product.name)
+                        logging.info("%s hâlâ stokta görünüyor; bildirim daha önce gönderildi.", product.name)
                     else:
-                        logging.info("%s appears to be in stock. Sending Pushover notification.", product.name)
+                        logging.info("%s stokta görünüyor. Pushover bildirimi gönderiliyor.", product.name)
                         send_pushover(settings, product)
                         notified_products.add(product_key)
                 else:
-                    logging.info("%s appears to be out of stock.", product.name)
+                    logging.info("%s stokta değil görünüyor.", product.name)
                     notified_products.discard(product_key)
 
                 next_check_times[product_key] = (
@@ -216,7 +216,7 @@ def main() -> None:
 
             sleep_seconds = next_sleep_seconds(settings.products, next_check_times)
         except Exception as exc:
-            logging.exception("Check failed: %s", exc)
+            logging.exception("Kontrol sırasında hata oluştu: %s", exc)
             sleep_seconds = 5 * 60
 
         time.sleep(sleep_seconds)
