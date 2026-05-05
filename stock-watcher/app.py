@@ -201,13 +201,13 @@ def main() -> None:
 
                 if in_stock:
                     if settings.notify_once and product_key in notified_products:
-                        logging.info("%s hâlâ stokta görünüyor; bildirim daha önce gönderildi.", product.name)
+                        logging.info("STOKTA: %s", product.name)
                     else:
-                        logging.info("%s stokta görünüyor. Pushover bildirimi gönderiliyor.", product.name)
+                        logging.info("STOKTA: %s", product.name)
                         send_pushover(settings, product)
                         notified_products.add(product_key)
                 else:
-                    logging.info("%s stokta değil görünüyor.", product.name)
+                    logging.info("Stokta Değil: %s", product.name)
                     notified_products.discard(product_key)
 
                 next_check_times[product_key] = (
