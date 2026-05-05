@@ -25,6 +25,7 @@ logging.basicConfig(
 class Product:
     name: str
     url: str
+    check_interval_minutes: int
     in_stock_keywords: list[str]
     out_of_stock_keywords: list[str]
 
@@ -32,7 +33,6 @@ class Product:
 @dataclass
 class Settings:
     products: list[Product]
-    check_interval_minutes: int
     pushover_user_key: str
     pushover_api_token: str
     notify_once: bool
@@ -47,12 +47,15 @@ def load_settings() -> Settings:
     raw = json.loads(OPTIONS_PATH.read_text(encoding="utf-8"))
     settings = Settings(
         products=load_products(raw),
-        check_interval_minutes=int(raw.get("check_interval_minutes", 60)),
         pushover_user_key=raw.get("pushover_user_key", "").strip(),
         pushover_api_token=raw.get("pushover_api_token", "").strip(),
         notify_once=bool(raw.get("notify_once", True)),
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 20)),
-        user_agent=raw.get("user_agent", "Mozilla/5.0").strip(),
+        user_agent=raw.get(
+            "user_agent",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ).strip(),
     )
     validate_settings(settings)
     return settings
@@ -61,6 +64,7 @@ def load_settings() -> Settings:
 def load_products(raw: dict) -> list[Product]:
     products = []
     raw_products = raw.get("products", [])
+    legacy_check_interval_minutes = int(raw.get("check_interval_minutes", 60))
     legacy_in_stock_keywords = normalize_keywords(raw.get("in_stock_keywords", []))
     legacy_out_of_stock_keywords = normalize_keywords(raw.get("out_of_stock_keywords", []))
 
@@ -71,12 +75,16 @@ def load_products(raw: dict) -> list[Product]:
 
             name = str(item.get("name") or f"Ürün {index}").strip()
             url = str(item.get("url") or "").strip()
+            check_interval_minutes = int(
+                item.get("check_interval_minutes", legacy_check_interval_minutes)
+            )
             in_stock_keywords = normalize_keywords(item.get("in_stock_keywords", []))
             out_of_stock_keywords = normalize_keywords(item.get("out_of_stock_keywords", []))
             products.append(
                 Product(
                     name=name,
                     url=url,
+                    check_interval_minutes=check_interval_minutes,
                     in_stock_keywords=in_stock_keywords or legacy_in_stock_keywords,
                     out_of_stock_keywords=out_of_stock_keywords or legacy_out_of_stock_keywords,
                 )
@@ -88,6 +96,7 @@ def load_products(raw: dict) -> list[Product]:
             Product(
                 name="Ürün 1",
                 url=legacy_url,
+                check_interval_minutes=legacy_check_interval_minutes,
                 in_stock_keywords=legacy_in_stock_keywords,
                 out_of_stock_keywords=legacy_out_of_stock_keywords,
             )
@@ -170,16 +179,22 @@ def send_pushover(settings: Settings, product: Product) -> None:
 
 def main() -> None:
     notified_products: set[str] = set()
+    next_check_times: dict[str, float] = {}
 
     while True:
         try:
             settings = load_settings()
+            now = time.monotonic()
             for product in settings.products:
                 if not product.url:
                     logging.info("Skipping product without URL: %s", product.name)
                     continue
 
                 product_key = product.url
+                next_check_time = next_check_times.get(product_key, 0)
+                if now < next_check_time:
+                    continue
+
                 logging.info("Checking product page: %s (%s)", product.name, product.url)
                 text = page_text(fetch_product_page(settings, product))
                 in_stock = detect_stock_state(text, product)
@@ -195,12 +210,30 @@ def main() -> None:
                     logging.info("%s appears to be out of stock.", product.name)
                     notified_products.discard(product_key)
 
-            sleep_seconds = max(settings.check_interval_minutes, 5) * 60
+                next_check_times[product_key] = (
+                    time.monotonic() + max(product.check_interval_minutes, 5) * 60
+                )
+
+            sleep_seconds = next_sleep_seconds(settings.products, next_check_times)
         except Exception as exc:
             logging.exception("Check failed: %s", exc)
             sleep_seconds = 5 * 60
 
         time.sleep(sleep_seconds)
+
+
+def next_sleep_seconds(products: list[Product], next_check_times: dict[str, float]) -> int:
+    active_products = [product for product in products if product.url]
+    pending_times = [
+        next_check_times[product.url]
+        for product in active_products
+        if product.url in next_check_times
+    ]
+
+    if len(pending_times) < len(active_products):
+        return 1
+
+    return max(1, min(60, int(min(pending_times) - time.monotonic())))
 
 
 if __name__ == "__main__":
