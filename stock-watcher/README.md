@@ -4,7 +4,7 @@ Bu eklenti, verdiğiniz ürün sayfalarını düzenli aralıklarla kontrol eder.
 
 ## Ayarlar
 
-- `products`: Kontrol edilecek ürün listesi. Her ürün için `name`, `url`, `check_interval_minutes`, `in_stock_keywords` ve `out_of_stock_keywords` girilir.
+- `products`: Kontrol edilecek ürün listesi. Her ürün için `name`, `enabled`, `url`, `check_interval_minutes`, `in_stock_keywords` ve `out_of_stock_keywords` girilir.
 - `pushover_user_key`: Pushover kullanıcı anahtarı.
 - `pushover_api_token`: Pushover uygulama API token değeri.
 - `notify_once_in_24h`: Ürün stokta kalmaya devam ederse aynı ürün için 24 saat boyunca tekrar bildirim göndermez. Ürün stok dışına düşerse sayaç sıfırlanır.
@@ -15,6 +15,7 @@ Bu eklenti, verdiğiniz ürün sayfalarını düzenli aralıklarla kontrol eder.
 ```yaml
 products:
   - name: "Ekran Kartı"
+    enabled: true
     url: "https://magaza.example/urun-1"
     check_interval_minutes: 15
     in_stock_keywords:
@@ -24,6 +25,7 @@ products:
       - "stokta yok"
       - "tükendi"
   - name: "SSD"
+    enabled: false
     url: "https://magaza.example/urun-2"
     check_interval_minutes: 120
     in_stock_keywords:
