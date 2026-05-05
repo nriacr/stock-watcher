@@ -16,16 +16,23 @@ PUSHOVER_URL = "https://api.pushover.net/1/messages.json"
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s: %(message)s",
+    format="[%(asctime)s] %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 
 @dataclass
-class Settings:
-    product_url: str
-    check_interval_minutes: int
+class Product:
+    name: str
+    url: str
     in_stock_keywords: list[str]
     out_of_stock_keywords: list[str]
+
+
+@dataclass
+class Settings:
+    products: list[Product]
+    check_interval_minutes: int
     pushover_user_key: str
     pushover_api_token: str
     notify_once: bool
@@ -38,11 +45,11 @@ def load_settings() -> Settings:
         raise FileNotFoundError(f"Home Assistant options file was not found: {OPTIONS_PATH}")
 
     raw = json.loads(OPTIONS_PATH.read_text(encoding="utf-8"))
+    in_stock_keywords = normalize_keywords(raw.get("in_stock_keywords", []))
+    out_of_stock_keywords = normalize_keywords(raw.get("out_of_stock_keywords", []))
     settings = Settings(
-        product_url=raw.get("product_url", "").strip(),
+        products=load_products(raw, in_stock_keywords, out_of_stock_keywords),
         check_interval_minutes=int(raw.get("check_interval_minutes", 60)),
-        in_stock_keywords=normalize_keywords(raw.get("in_stock_keywords", [])),
-        out_of_stock_keywords=normalize_keywords(raw.get("out_of_stock_keywords", [])),
         pushover_user_key=raw.get("pushover_user_key", "").strip(),
         pushover_api_token=raw.get("pushover_api_token", "").strip(),
         notify_once=bool(raw.get("notify_once", True)),
@@ -51,6 +58,44 @@ def load_settings() -> Settings:
     )
     validate_settings(settings)
     return settings
+
+
+def load_products(
+    raw: dict,
+    in_stock_keywords: list[str],
+    out_of_stock_keywords: list[str],
+) -> list[Product]:
+    products = []
+    raw_products = raw.get("products", [])
+
+    if isinstance(raw_products, list):
+        for index, item in enumerate(raw_products, start=1):
+            if not isinstance(item, dict):
+                continue
+
+            name = str(item.get("name") or f"Ürün {index}").strip()
+            url = str(item.get("url") or "").strip()
+            products.append(
+                Product(
+                    name=name,
+                    url=url,
+                    in_stock_keywords=in_stock_keywords,
+                    out_of_stock_keywords=out_of_stock_keywords,
+                )
+            )
+
+    legacy_url = str(raw.get("product_url") or "").strip()
+    if not products and legacy_url:
+        products.append(
+            Product(
+                name="Ürün 1",
+                url=legacy_url,
+                in_stock_keywords=in_stock_keywords,
+                out_of_stock_keywords=out_of_stock_keywords,
+            )
+        )
+
+    return products
 
 
 def normalize_keywords(value: object) -> list[str]:
@@ -62,22 +107,22 @@ def normalize_keywords(value: object) -> list[str]:
 
 def validate_settings(settings: Settings) -> None:
     missing = []
-    if not settings.product_url:
-        missing.append("product_url")
+    if not settings.products or not any(product.url for product in settings.products):
+        missing.append("products")
     if not settings.pushover_user_key:
         missing.append("pushover_user_key")
     if not settings.pushover_api_token:
         missing.append("pushover_api_token")
-    if not settings.in_stock_keywords and not settings.out_of_stock_keywords:
+    if not any(product.in_stock_keywords or product.out_of_stock_keywords for product in settings.products):
         missing.append("in_stock_keywords or out_of_stock_keywords")
 
     if missing:
         raise ValueError("Missing required add-on options: " + ", ".join(missing))
 
 
-def fetch_product_page(settings: Settings) -> str:
+def fetch_product_page(settings: Settings, product: Product) -> str:
     response = requests.get(
-        settings.product_url,
+        product.url,
         headers={"User-Agent": settings.user_agent},
         timeout=settings.request_timeout_seconds,
     )
@@ -98,9 +143,9 @@ def contains_any(text: str, keywords: Iterable[str]) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
-def detect_stock_state(text: str, settings: Settings) -> bool:
-    has_out_of_stock = contains_any(text, settings.out_of_stock_keywords)
-    has_in_stock = contains_any(text, settings.in_stock_keywords)
+def detect_stock_state(text: str, product: Product) -> bool:
+    has_out_of_stock = contains_any(text, product.out_of_stock_keywords)
+    has_in_stock = contains_any(text, product.in_stock_keywords)
 
     if has_out_of_stock:
         return False
@@ -108,15 +153,15 @@ def detect_stock_state(text: str, settings: Settings) -> bool:
     return has_in_stock
 
 
-def send_pushover(settings: Settings) -> None:
+def send_pushover(settings: Settings, product: Product) -> None:
     response = requests.post(
         PUSHOVER_URL,
         data={
             "token": settings.pushover_api_token,
             "user": settings.pushover_user_key,
-            "title": "Ürün stoğa geldi",
-            "message": f"Takip ettiğiniz ürün stokta görünüyor: {settings.product_url}",
-            "url": settings.product_url,
+            "title": f"{product.name} stoğa geldi",
+            "message": f"Takip ettiğiniz ürün stokta görünüyor: {product.url}",
+            "url": product.url,
             "url_title": "Ürüne git",
             "priority": 1,
         },
@@ -126,25 +171,31 @@ def send_pushover(settings: Settings) -> None:
 
 
 def main() -> None:
-    notified = False
+    notified_products: set[str] = set()
 
     while True:
         try:
             settings = load_settings()
-            logging.info("Checking product page: %s", settings.product_url)
-            text = page_text(fetch_product_page(settings))
-            in_stock = detect_stock_state(text, settings)
+            for product in settings.products:
+                if not product.url:
+                    logging.info("Skipping product without URL: %s", product.name)
+                    continue
 
-            if in_stock:
-                if settings.notify_once and notified:
-                    logging.info("Product is still in stock; notification already sent.")
+                product_key = product.url
+                logging.info("Checking product page: %s (%s)", product.name, product.url)
+                text = page_text(fetch_product_page(settings, product))
+                in_stock = detect_stock_state(text, product)
+
+                if in_stock:
+                    if settings.notify_once and product_key in notified_products:
+                        logging.info("%s is still in stock; notification already sent.", product.name)
+                    else:
+                        logging.info("%s appears to be in stock. Sending Pushover notification.", product.name)
+                        send_pushover(settings, product)
+                        notified_products.add(product_key)
                 else:
-                    logging.info("Product appears to be in stock. Sending Pushover notification.")
-                    send_pushover(settings)
-                    notified = True
-            else:
-                logging.info("Product appears to be out of stock.")
-                notified = False
+                    logging.info("%s appears to be out of stock.", product.name)
+                    notified_products.discard(product_key)
 
             sleep_seconds = max(settings.check_interval_minutes, 5) * 60
         except Exception as exc:
