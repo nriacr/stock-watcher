@@ -2,7 +2,7 @@
 
 Bu repository, Raspberry Pi 4 üzerinde Home Assistant OS içinde çalışacak bir stok takip eklentisi içerir.
 
-Eklenti saat başı ürün sayfasını kontrol eder ve ürün stoğa girerse Pushover bildirimi gönderir.
+Eklenti saat başı ürün sayfalarını kontrol eder ve ürünlerden biri stoğa girerse Pushover bildirimi gönderir.
 
 ## GitHub'a Yükleme
 
@@ -26,7 +26,7 @@ GitHub repository adresi: https://github.com/nriacr/stock-watcher
 
 ## Gerekli Bilgiler
 
-- Ürün linki
+- Ürün adları ve linkleri
 - Pushover User Key
 - Pushover API Token
 - Stokta olduğunu gösteren metinler
