@@ -170,7 +170,7 @@ def send_pushover(settings: Settings, product: Product) -> None:
             "message": f"Takip ettiğiniz ürün stokta görünüyor: {product.url}",
             "url": product.url,
             "url_title": "Ürüne git",
-            "priority": 1,
+            "priority": 0,
         },
         timeout=settings.request_timeout_seconds,
     )
