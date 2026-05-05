@@ -26,6 +26,7 @@ class Product:
     name: str
     enabled: bool
     url: str
+    notify_once_in_24h: bool
     check_interval_minutes: int
     in_stock_keywords: list[str]
     out_of_stock_keywords: list[str]
@@ -36,7 +37,6 @@ class Settings:
     products: list[Product]
     pushover_user_key: str
     pushover_api_token: str
-    notify_once_in_24h: bool
     request_timeout_seconds: int
     user_agent: str
 
@@ -50,7 +50,6 @@ def load_settings() -> Settings:
         products=load_products(raw),
         pushover_user_key=raw.get("pushover_user_key", "").strip(),
         pushover_api_token=raw.get("pushover_api_token", "").strip(),
-        notify_once_in_24h=bool(raw.get("notify_once_in_24h", raw.get("notify_once", True))),
         request_timeout_seconds=int(raw.get("request_timeout_seconds", 20)),
         user_agent=raw.get(
             "user_agent",
@@ -66,6 +65,7 @@ def load_products(raw: dict) -> list[Product]:
     products = []
     raw_products = raw.get("products", [])
     legacy_check_interval_minutes = int(raw.get("check_interval_minutes", 60))
+    legacy_notify_once_in_24h = bool(raw.get("notify_once_in_24h", raw.get("notify_once", True)))
     legacy_in_stock_keywords = normalize_keywords(raw.get("in_stock_keywords", []))
     legacy_out_of_stock_keywords = normalize_keywords(raw.get("out_of_stock_keywords", []))
 
@@ -77,6 +77,7 @@ def load_products(raw: dict) -> list[Product]:
             name = str(item.get("name") or f"Ürün {index}").strip()
             enabled = bool(item.get("enabled", True))
             url = str(item.get("url") or "").strip()
+            notify_once_in_24h = bool(item.get("notify_once_in_24h", legacy_notify_once_in_24h))
             check_interval_minutes = int(
                 item.get("check_interval_minutes", legacy_check_interval_minutes)
             )
@@ -87,6 +88,7 @@ def load_products(raw: dict) -> list[Product]:
                     name=name,
                     enabled=enabled,
                     url=url,
+                    notify_once_in_24h=notify_once_in_24h,
                     check_interval_minutes=check_interval_minutes,
                     in_stock_keywords=in_stock_keywords or legacy_in_stock_keywords,
                     out_of_stock_keywords=out_of_stock_keywords or legacy_out_of_stock_keywords,
@@ -100,6 +102,7 @@ def load_products(raw: dict) -> list[Product]:
                 name="Ürün 1",
                 enabled=True,
                 url=legacy_url,
+                notify_once_in_24h=legacy_notify_once_in_24h,
                 check_interval_minutes=legacy_check_interval_minutes,
                 in_stock_keywords=legacy_in_stock_keywords,
                 out_of_stock_keywords=legacy_out_of_stock_keywords,
@@ -220,7 +223,7 @@ def main() -> None:
 
                 if in_stock:
                     logging.info("STOKTA: %s", product.name)
-                    if should_send_notification(settings, product_key, last_notification_times):
+                    if should_send_notification(product, product_key, last_notification_times):
                         send_pushover(settings, product)
                         last_notification_times[product_key] = time.monotonic()
                 else:
@@ -257,11 +260,11 @@ def next_sleep_seconds(products: list[Product], next_check_times: dict[str, floa
 
 
 def should_send_notification(
-    settings: Settings,
+    product: Product,
     product_key: str,
     last_notification_times: dict[str, float],
 ) -> bool:
-    if not settings.notify_once_in_24h:
+    if not product.notify_once_in_24h:
         return True
 
     last_notification_time = last_notification_times.get(product_key)
