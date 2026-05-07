@@ -17,6 +17,8 @@ DEFAULT_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 NO_ACTIVE_PRODUCTS_SLEEP_SECONDS = 5 * 60
+MIN_CHECK_INTERVAL_MINUTES = 5
+NOTIFICATION_SILENCE_SECONDS = 24 * 60 * 60
 
 
 logging.basicConfig(
@@ -55,8 +57,8 @@ def load_settings() -> Settings:
         products=load_products(raw),
         pushover_user_key=raw.get("pushover_user_key", "").strip(),
         pushover_api_token=raw.get("pushover_api_token", "").strip(),
-        request_timeout_seconds=int(raw.get("request_timeout_seconds", 20)),
-        user_agent=raw.get("user_agent", DEFAULT_USER_AGENT).strip(),
+        request_timeout_seconds=as_int(raw.get("request_timeout_seconds"), default=20),
+        user_agent=normalize_user_agent(raw.get("user_agent")),
     )
     validate_settings(settings)
     return settings
@@ -75,7 +77,10 @@ def load_products(raw: dict) -> list[Product]:
             enabled = as_bool(item.get("enabled"), default=True)
             url = str(item.get("url") or "").strip()
             notify_once_in_24h = as_bool(item.get("notify_once_in_24h"), default=True)
-            check_interval_minutes = as_int(item.get("check_interval_minutes"), default=60)
+            check_interval_minutes = max(
+                as_int(item.get("check_interval_minutes"), default=60),
+                MIN_CHECK_INTERVAL_MINUTES,
+            )
             in_stock_keywords = normalize_keywords(item.get("in_stock_keywords", []))
             out_of_stock_keywords = normalize_keywords(item.get("out_of_stock_keywords", []))
             products.append(
@@ -114,6 +119,11 @@ def as_int(value: object, default: int) -> int:
         return default
 
 
+def normalize_user_agent(value: object) -> str:
+    user_agent = str(value or "").strip()
+    return user_agent or DEFAULT_USER_AGENT
+
+
 def normalize_keywords(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -123,18 +133,18 @@ def normalize_keywords(value: object) -> list[str]:
 
 def validate_settings(settings: Settings) -> None:
     missing = []
-    active_products = [product for product in settings.products if product.enabled and product.url]
+    active = active_products(settings.products)
 
     if not settings.products:
         missing.append("products")
-    if active_products and not settings.pushover_user_key:
+    if active and not settings.pushover_user_key:
         missing.append("pushover_user_key")
-    if active_products and not settings.pushover_api_token:
+    if active and not settings.pushover_api_token:
         missing.append("pushover_api_token")
 
     products_without_keywords = [
         product.name
-        for product in active_products
+        for product in active
         if not product.in_stock_keywords and not product.out_of_stock_keywords
     ]
     if products_without_keywords:
@@ -205,8 +215,8 @@ def main() -> None:
             product_keys = {product_key_for(product) for product in settings.products}
             prune_product_state(product_keys, next_check_times, last_notification_times)
 
-            active_products = [product for product in settings.products if product.enabled and product.url]
-            if not active_products:
+            active = active_products(settings.products)
+            if not active:
                 next_check_times.clear()
                 last_notification_times.clear()
                 logging.info("Kontrol edilecek aktif ürün bulunamadı.")
@@ -240,9 +250,7 @@ def main() -> None:
                         logging.info("Stokta Değil: %s", product.name)
                         last_notification_times.pop(product_key, None)
 
-                    next_check_times[product_key] = (
-                        time.monotonic() + max(product.check_interval_minutes, 5) * 60
-                    )
+                    next_check_times[product_key] = time.monotonic() + product.check_interval_minutes * 60
 
                 sleep_seconds = next_sleep_seconds(settings.products, next_check_times)
         except Exception as exc:
@@ -253,20 +261,24 @@ def main() -> None:
 
 
 def next_sleep_seconds(products: list[Product], next_check_times: dict[str, float]) -> int:
-    active_products = [product for product in products if product.enabled and product.url]
-    if not active_products:
+    active = active_products(products)
+    if not active:
         return NO_ACTIVE_PRODUCTS_SLEEP_SECONDS
 
     pending_times = [
         next_check_times[product_key_for(product)]
-        for product in active_products
+        for product in active
         if product_key_for(product) in next_check_times
     ]
 
-    if len(pending_times) < len(active_products):
+    if len(pending_times) < len(active):
         return 1
 
     return max(1, min(60, int(min(pending_times) - time.monotonic())))
+
+
+def active_products(products: list[Product]) -> list[Product]:
+    return [product for product in products if product.enabled and bool(product.url)]
 
 
 def product_key_for(product: Product) -> str:
@@ -296,7 +308,7 @@ def should_send_notification(
     if last_notification_time is None:
         return True
 
-    return time.monotonic() - last_notification_time >= 24 * 60 * 60
+    return time.monotonic() - last_notification_time >= NOTIFICATION_SILENCE_SECONDS
 
 
 if __name__ == "__main__":
